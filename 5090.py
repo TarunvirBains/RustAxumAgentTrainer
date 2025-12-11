@@ -74,8 +74,8 @@ def load_dataset_safe(dataset_name: str, split: str = "train"):
         logger.error(f"✗ Failed to load {dataset_name}: {str(e)}")
         return None
 
-swe_plus = load_dataset_safe("TuringEnterprises/SWE-Bench-plus-plus", split="train")
-swe_pro = load_dataset_safe("ScaleAI/SWE-bench_Pro", split="verified")
+swe_plus = load_dataset_safe("TuringEnterprises/SWE-Bench-plus-plus", split="test")
+swe_pro = load_dataset_safe("ScaleAI/SWE-bench_Pro", split="test")
 if swe_pro is not None:
     swe_pro = swe_pro.repeat(8)
 
