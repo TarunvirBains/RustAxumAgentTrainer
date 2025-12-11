@@ -109,12 +109,13 @@ raw_dataset = concatenate_datasets(datasets_list)
 logger.info(f"Total combined dataset size: {len(raw_dataset)}")
 
 # ----------------------------------------------------
-# 3. DATA FORMATTING & SPLIT
+# 3. ROBUST DATA FORMATTING (Format -> Concat)
 # ----------------------------------------------------
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
 
+# --- Move the formatting function UP here ---
 def format_qwen_chat(sample: Dict[str, Any]) -> Dict[str, Any]:
     try:
         user_content = None
@@ -128,11 +129,13 @@ def format_qwen_chat(sample: Dict[str, Any]) -> Dict[str, Any]:
         elif 'prompt' in sample and 'code' in sample:
             user_content = f"Generate Rust code for: {sample['prompt']}"
             assistant_content = str(sample["code"]).strip()
-        # 3. SWE-Bench (Bug Fix)
-        elif 'problem_statement' in sample and 'model_patch' in sample:
+        # 3. SWE-Bench (Bug Fix) - Handles both Plus & Pro versions
+        elif 'problem_statement' in sample and ('model_patch' in sample or 'patch' in sample):
             repo = sample.get('repo', 'Unknown')
+            # Handle different column names for patch
+            patch_content = sample.get('model_patch') or sample.get('patch')
             user_content = f"Fix issue in {repo}:\n{sample['problem_statement']}"
-            assistant_content = f"{sample['model_patch']}"
+            assistant_content = f"{patch_content}"
         # 4. Text-to-SQL
         elif 'text' in sample and 'sql' in sample:
             user_content = f"Generate PostgreSQL query for: {sample['text']}"
@@ -165,15 +168,34 @@ def format_qwen_chat(sample: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         return {"text": ""}
 
-logger.info("Formatting dataset...")
-# Using 12 workers for typical desktop CPU
-formatted_data = raw_dataset.map(
-    format_qwen_chat, 
-    remove_columns=raw_dataset.column_names, 
-    num_proc=12, 
-    desc="Formatting"
-)
-formatted_data = formatted_data.filter(lambda x: x["text"] != "")
+logger.info("Formatting datasets individually to prevent schema errors...")
+formatted_datasets = []
+
+for ds in datasets_list:
+    # Process each dataset individually
+    # This strips away the conflicting columns (like FAIL_TO_PASS) immediately
+    try:
+        processed_ds = ds.map(
+            format_qwen_chat, 
+            remove_columns=ds.column_names,  # Removes the conflicting schema columns
+            num_proc=6,                      # Safe for WSL (12 was too high)
+            desc=f"Formatting subset"
+        )
+        
+        # Ensure only the 'text' column remains
+        if "text" in processed_ds.column_names:
+            processed_ds = processed_ds.select_columns(["text"])
+            # Filter empty rows
+            processed_ds = processed_ds.filter(lambda x: x["text"] != "")
+            formatted_datasets.append(processed_ds)
+            
+    except Exception as e:
+        logger.warning(f"Skipping a dataset due to formatting error: {e}")
+
+# NOW it is safe to concatenate because they all have the same schema: {"text": string}
+formatted_data = concatenate_datasets(formatted_datasets)
+logger.info(f"Total Combined Size: {len(formatted_data)} rows")
+
 if len(formatted_data) == 0:
     raise ValueError("All samples were filtered out! Check format_qwen_chat logic")
 
@@ -192,8 +214,6 @@ if val_size > len(shuffled_data) * 0.2:
 
 train_dataset = shuffled_data.select(range(train_size))
 eval_dataset = shuffled_data.select(range(train_size, len(shuffled_data)))
-logger.info(f"Train samples: {len(train_dataset)} | Validation samples: {len(eval_dataset)}")
-
 
 # ----------------------------------------------------
 # 4. MODEL LOADING (4-BIT QLoRA)
