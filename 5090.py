@@ -12,6 +12,13 @@ import logging
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+try:
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(True)
+    logger.info("✓ Enabled SDPA optimizations")
+except:
+    logger.warning("⚠️ Could not enable SDPA optimizations")
 
 # --- 1. CONFIGURATION: SINGLE RTX 5090 ---
 MODEL_ID = "Qwen/Qwen3-Coder-30B-A3B-Instruct" 
@@ -32,6 +39,8 @@ LORA_R = 64
 LORA_ALPHA = 128              
 DROPOUT = 0.05
 
+
+
 # Flash Attention detection
 try:
     import flash_attn
@@ -40,6 +49,8 @@ try:
 except ImportError:
     FLASH_ATTN_AVAILABLE = False
     logger.warning("⚠️ Flash Attention 2 not available, using PyTorch SDPA")
+
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -148,7 +159,7 @@ def format_qwen_chat(sample: Dict[str, Any]) -> Dict[str, Any]:
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": assistant_content},
         ]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False, add_special_tokens=False)
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
         return {"text": text}
     
     except Exception:
@@ -251,11 +262,11 @@ training_args = TrainingArguments(
     
     # Evaluation & Saving
     eval_strategy="steps",
-    eval_steps=100,
+    eval_steps=500,
     save_strategy="steps",
-    save_steps=100,
+    save_steps=500,
     save_total_limit=2,
-    load_best_model_at_end=True,
+    load_best_model_at_end=False,
     metric_for_best_model="eval_loss",
     
     warmup_ratio=0.03,
@@ -277,7 +288,7 @@ trainer = SFTTrainer(
     peft_config=peft_config,
     max_seq_length=MAX_SEQ_LENGTH,
     tokenizer=tokenizer,
-    packing=True,
+    packing=False,
     dataset_text_field="text",
 )
 
